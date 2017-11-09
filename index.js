@@ -10,52 +10,67 @@ var authorization = util.format('Bearer %s', config.access_token);
 var shortDate = 'YYYYMMDD';
 var longDate = 'dddd, MMMM D, YYYY';
 
-var xmlstatsUrl = {
-    host: 'erikberg.com',
-    // sport: undefined,
-    sport: 'nba',
-    // endpoint: 'events',
-    endpoint: 'teams',
-    id: undefined,
-    format: 'json'//,
-    // params: {
-    //     sport: 'nba',
-    //     date: ''
-    // }
-};
+function buildRequestConfig() {
+    return {
+        host: 'erikberg.com',
+        // sport: undefined,
+        sport: 'nba',
+        // endpoint: 'events',
+        endpoint: 'teams',
+        id: undefined,
+        format: 'json',
+        params: {
+        //     sport: 'nba',
+            date: moment().format(shortDate)
+         }
+    };
+}
 
 // var method = 'nba/teams';
 // var method = 'nba/results/'+teamId;
 // var method = 'nba/boxscore/'+eventId;
 
-var fetcher = function () {
-    if (xmlstatsUrl.params) {
-        xmlstatsUrl.params.date = moment().format(shortDate);
-    }
-    var url = buildUrl(xmlstatsUrl);
-    httpGet(url, function (statusCode, contentType, data) {
+function fetchTeams (callback) {
+    var rc = buildRequestConfig();
+    rc.endpoint = 'teams';
+    console.log('rc',rc)
+    fetcher(rc, callback);
+}
+
+function fetchGames (teamId, callback) {
+    var rc = buildRequestConfig();
+    rc.endpoint = 'results';
+    rc.id = teamId;
+    rc.params.date = moment().add(10, 'days').format(shortDate);
+    console.log('rc',rc)
+    fetcher(rc, callback);
+}
+
+function fetchResults (eventId, callback) {
+    var rc = buildRequestConfig();
+    rc.endpoint = 'boxscore';
+    rc.id = eventId;
+    console.log('rc',rc)
+    fetcher(rc, callback);
+}
+
+
+function fetcher (requestConfig, callback) {
+    httpGet(requestConfig, buildUrl(requestConfig), function (statusCode, contentType, data) {
         if (statusCode !== 200) {
-            console.warn('Server did not return a "200 OK" response! ' +
-                'Got "%s" instead.', statusCode);
-            // If error response is of type 'application/json', it will be an
+            console.warn('Server did not return a "200 OK" response! ', statusCode, data);
             // XmlstatsError see https://erikberg.com/api/objects/xmlstats-error
-            // var reason = (contentType === 'application/json')
-            //     ? data.error.description
-            //     : data;
-            //res.status(statusCode).render('error', { code: statusCode, reason: reason });
             return;
         }
-        var titleDate = formatDate(data.events_date, longDate);
-        console.log("titleDate", titleDate);
-        console.log("events data", data);
+        callback(data);
     });
 };
 
-function httpGet(url, callback) {
+function httpGet(requestConfig, url, callback) {
     console.log('httpGet', url);
 
     var options = {
-        hostname: xmlstatsUrl.host,
+        hostname: requestConfig.host,
         path: url,
         headers: {
             'Accept-Encoding': 'gzip',
@@ -97,7 +112,6 @@ function formatDate(date, fmt) {
 }
 
 // See https://erikberg.com/api/endpoints#requrl Request URL Convention
-// for an explanation
 function buildUrl(opts) {
     var ary = [opts.sport, opts.endpoint, opts.id];
 
@@ -132,7 +146,17 @@ exports.handler = function(event, context, callback) {
   console.log('==================================');
   console.log('Stopping index.handler');
 
-  fetcher();
+  //  fetchTeams(function(result) {
+  //    console.log('result', result);
+  //});
+
+    fetchGames('boston-celtics', function(result) {
+        console.log('result', result);
+    });
+
+    //fetchResults('20171020-boston-celtics-at-philadelphia-76ers', function(result) {
+    //    console.log('result', result);
+    //});
 
   if (callback) {
     callback(null, event);
