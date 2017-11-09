@@ -1,7 +1,10 @@
+require('dotenv').load();
 var https = require('https');
 var moment = require('moment-timezone');
 var util = require('util');
 var zlib = require('zlib');
+
+var Cloudant = require('cloudant');
 
 var config = require('./config.json');
 var userAgent = util.format('xmlstats-exnode/%s (%s)', config.version, config.user_agent_contact);
@@ -10,52 +13,72 @@ var authorization = util.format('Bearer %s', config.access_token);
 var shortDate = 'YYYYMMDD';
 var longDate = 'dddd, MMMM D, YYYY';
 
-function buildRequestConfig() {
+var username =    process.env.cloudant_username;
+var password =    process.env.cloudant_password;
+
+console.log('cloudant', username, password);
+var cloudant = Cloudant({account:username, password:password, plugin:'promises'});
+
+var teamDbName =    'b_teams';
+var gamesDbName =   'b_games';
+var resultsDbName = 'b_results';
+var playersDbName = 'b_players';
+
+var teamDb = cloudant.db.use(teamDbName);
+var gamesDb = cloudant.db.use(gamesDbName);
+var resultsDb = cloudant.db.use(resultsDbName);
+var playersDb = cloudant.db.use(playersDbName);
+
+function createDb(dbname) {
+    cloudant.db.create(dbname).then(function (data) {
+        console.log("create result", dbname, data);
+        db = cloudant.db.use(dbname);
+        var security = {
+            nobody: ['_reader', '_replicator'],
+            apiKey: ['_reader', '_replicator'],
+            bestgametowatch: ['_reader', '_writer', '_admin', '_replicator']
+        };
+        db.set_security(security, function (er, result) {
+            if (er) {
+                throw er;
+            }
+            console.log("set_security result", result);
+        });
+    }).catch(function (err) {
+        console.log('create db error ', dbname, err);
+    });
+}
+
+function buildRequestConfig(endpoint, id) {
     return {
         host: 'erikberg.com',
         // sport: undefined,
         sport: 'nba',
         // endpoint: 'events',
-        endpoint: 'teams',
-        id: undefined,
-        format: 'json',
-        params: {
-        //     sport: 'nba',
-            date: moment().format(shortDate)
-         }
+        endpoint: endpoint,
+        id: id,
+        format: 'json'
+        // ,
+        // params: {
+        //     date: moment().format(shortDate)
+        //  }
     };
 }
 
-// var method = 'nba/teams';
-// var method = 'nba/results/'+teamId;
-// var method = 'nba/boxscore/'+eventId;
-
 function fetchTeams (callback) {
-    var rc = buildRequestConfig();
-    rc.endpoint = 'teams';
-    console.log('rc',rc)
-    fetcher(rc, callback);
+    fetcher(buildRequestConfig('teams'), callback);
 }
 
 function fetchGames (teamId, callback) {
-    var rc = buildRequestConfig();
-    rc.endpoint = 'results';
-    rc.id = teamId;
-    rc.params.date = moment().add(10, 'days').format(shortDate);
-    console.log('rc',rc)
-    fetcher(rc, callback);
+    fetcher(buildRequestConfig('results', teamId), callback);
 }
 
 function fetchResults (eventId, callback) {
-    var rc = buildRequestConfig();
-    rc.endpoint = 'boxscore';
-    rc.id = eventId;
-    console.log('rc',rc)
-    fetcher(rc, callback);
+    fetcher(buildRequestConfig('boxscore', eventId), callback);
 }
 
-
 function fetcher (requestConfig, callback) {
+    console.log('requestConfig',requestConfig)
     httpGet(requestConfig, buildUrl(requestConfig), function (statusCode, contentType, data) {
         if (statusCode !== 200) {
             console.warn('Server did not return a "200 OK" response! ', statusCode, data);
@@ -140,23 +163,104 @@ function buildUrl(opts) {
 
 // For development/testing purposes
 exports.handler = function(event, context, callback) {
-  console.log('Running index.handler');
-  console.log('==================================');
-  console.log('event', event);
-  console.log('==================================');
-  console.log('Stopping index.handler');
+  // console.log('Running index.handler');
+  // console.log('==================================');
+  // console.log('event', event);
+  // console.log('==================================');
+  // console.log('Stopping index.handler');
 
-  //  fetchTeams(function(result) {
-  //    console.log('result', result);
-  //});
+    // createDb(teamDbName);
+    // createDb(gamesDbName);
+    // createDb(resultsDbName);
+    // createDb(playersDbName);
 
-    fetchGames('boston-celtics', function(result) {
-        console.log('result', result);
+  //  fetchTeams(function(teams) {
+  //    console.log('teams', teams);
+  //
+  //      teams.forEach(function (team) {
+  //          console.log('team', team);
+  //          teamDb.insert(team, team.team_id, function(err, body) {
+  //              if (err) {
+  //                  console.error(err);
+  //              }
+  //              else {
+  //                  console.log(body);
+  //              }
+  //          });
+  //      });
+  //
+  // });
+
+
+    // teamDb.list(function(err, body) {
+    //     if (!err) {
+    //         body.rows.forEach(function(doc, idx) {
+    //             var teamId = doc.id;
+    //             if (idx < 1) {
+    //                 setTimeout(function () {
+    //                     console.log('x', teamId, idx);
+    //
+    //                     fetchGames(teamId, function(games) {
+    //                         console.log('size', teamId, games.length);
+    //
+    //                         games.forEach(function (game) {
+    //                              console.log('game', game);
+    //                              gamesDb.insert(game, game.event_id, function(err, body) {
+    //                                  if (err) {
+    //                                      console.error(err);
+    //                                  }
+    //                                  else {
+    //                                      console.log(body);
+    //                                  }
+    //                              });
+    //                          });
+    //                     });
+    //                 }, idx * 500);
+    //             }
+    //         });
+    //     }
+    // });
+
+    gamesDb.list(function(err, body) {
+        if (!err) {
+            body.rows.forEach(function(doc, idx) {
+                var gameId = doc.id;
+                if (idx < 1) {
+                    setTimeout(function () {
+                        console.log('x', gameId, idx);
+                        fetchResults(gameId, function(result) {
+                            console.log('result', gameId, result);
+                            // gamesDb.insert(game, game.event_id, function(err, body) {
+                            //     if (err) {
+                            //         console.error(err);
+                            //     }
+                            //     else {
+                            //         console.log(body);
+                            //     }
+                            // });
+                        });
+                    }, idx * 500);
+                }
+            });
+        }
     });
 
-    //fetchResults('20171020-boston-celtics-at-philadelphia-76ers', function(result) {
-    //    console.log('result', result);
-    //});
+     // teams.forEach(function (team) {
+     //     console.log('team', team);
+     //     teamDb.insert(team, team.team_id, function(err, body) {
+     //         if (err) {
+     //             console.error(err);
+     //         }
+     //         else {
+     //             console.log(body);
+     //         }
+     //     });
+     // });
+
+    // fetchResults('20171020-boston-celtics-at-philadelphia-76ers', function(result) {
+    //    // console.log('result', result);
+    //     console.log('size', result.length);
+    // });
 
   if (callback) {
     callback(null, event);
