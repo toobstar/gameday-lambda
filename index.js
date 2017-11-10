@@ -242,38 +242,76 @@ function fetchResultsForGames() {
         if (!err) {
             body.rows.forEach(function(doc, idx) {
                 var gameId = doc.id;
-                if (idx < 1) { // TODO just for testing!
-                    setTimeout(function () {
-                        console.log('x', gameId, idx);
-                        fetchResults(gameId, function(result) {
-                            console.log('result', gameId, result.length);
-
-                            resultsDb.get(gameId, { revs_info: true }, function(err, existingResult) {
-                                if (err) {
-                                    console.error(err);
+                setTimeout(function () {
+                    console.log('x', gameId, idx);
+                    fetchResults(gameId, function(result) {
+                        console.log('result', gameId, result.length);
+                        resultsDb.get(gameId, { revs_info: true }, function(err, existingResult) {
+                            if (err) {
+                                console.error(err);
+                            }
+                            else {
+                                console.log('existingResult', !isNull(existingResult));
+                                if (existingResult) {
+                                    result._id = existingResult._id;
+                                    result._rev = existingResult._rev;
                                 }
-                                else {
-                                    console.log('existingResult', !isNull(existingResult));
-                                    if (existingResult) {
-                                        result._id = existingResult._id;
-                                        result._rev = existingResult._rev;
+                                existingResult = result;
+                                resultsDb.insert(existingResult, gameId, function(err, body) {
+                                    if (err) {
+                                        console.error(err);
                                     }
-                                    existingResult = result;
-                                    resultsDb.insert(existingResult, gameId, function(err, body) {
-                                        if (err) {
-                                            console.error(err);
-                                        }
-                                        else {
-                                            //console.log(body);
-                                        }
+                                    else {
+                                        //console.log(body);
+                                    }
+                                });
+                            }
+                        });
+
+
+                    });
+                }, idx * 500);
+            });
+        }
+    });
+}
+
+function setupPlayers() {
+    teamDb.list(function(err, body) {
+        if (!err) {
+            console.log('body', body);
+            body.rows.forEach(function(doc, idx) {
+                var teamId = doc.id;
+                setTimeout(function () {
+                    console.log('x', teamId, idx);
+
+                    fetchPlayers(teamId, function(playerResult) {
+                        var players = playerResult.players;
+                        console.log('size', teamId, players.length);
+
+                        players.forEach(function (player) {
+                            player.teamId = teamId;
+                            playersDb.get(player.display_name, { revs_info: true }).then(function(existingResult) {
+                                console.log('existingResult', !isNull(existingResult));
+                                if (existingResult) {
+                                    player._id = existingResult._id;
+                                    player._rev = existingResult._rev;
+                                    playersDb.insert(player, player.display_name).then(function(data) {
+                                        console.log('updated existing player', data);
+                                    }).catch(function(err) {
+                                        console.log('something went wrong updated', err);
                                     });
                                 }
+                            }).catch(function(err) {
+                                playersDb.insert(player, player.display_name).then(function(data) {
+                                    console.log('created new player', data);
+                                }).catch(function(err2) {
+                                    console.log('something went wrong new', err2);
+                                });
                             });
-
-
                         });
-                    }, idx * 500);
-                }
+                    });
+                }, idx * 10000);
             });
         }
     });
@@ -287,7 +325,8 @@ exports.handler = function(event, context, callback) {
   // console.log('==================================');
   // console.log('Stopping index.handler');
 
-    fetchResultsForGames();
+    //fetchResultsForGames();
+    setupPlayers();
 
     // fetchPlayers('atlanta-hawks', function(result) {
     //     console.log('result', result);
