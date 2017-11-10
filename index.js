@@ -73,6 +73,10 @@ function fetchGames (teamId, callback) {
     fetcher(buildRequestConfig('results', teamId), callback);
 }
 
+function fetchPlayers (teamId, callback) {
+    fetcher(buildRequestConfig('roster', teamId), callback);
+}
+
 function fetchResults (eventId, callback) {
     fetcher(buildRequestConfig('boxscore', eventId), callback);
 }
@@ -160,6 +164,120 @@ function buildUrl(opts) {
     return url;
 }
 
+function createDbs() {
+    createDb(teamDbName);
+    createDb(gamesDbName);
+    createDb(resultsDbName);
+    createDb(playersDbName);
+}
+
+
+function removeDbs() {
+    cloudant.db.list(function(err, body) {
+        body.forEach(function(db) {
+            console.log(db);
+            cloudant.db.destroy(db).then(function (data) {
+               console.log("destroy result",  data);
+            }).catch(function (err) {
+               console.log('destroy db error ',  err);
+            });
+        });
+    });
+}
+
+function setupTeams() {
+    fetchTeams(function(teams) {
+        teams.forEach(function (team) {
+            console.log('team', team);
+            teamDb.insert(team, team.team_id, function(err, body) {
+                if (err) {
+                    console.error(err);
+                }
+                else {
+                    console.log(body);
+                }
+            });
+        });
+
+    });
+}
+
+function setupGames() {
+    teamDb.list(function(err, body) {
+        if (!err) {
+            body.rows.forEach(function(doc, idx) {
+                var teamId = doc.id;
+                if (idx < 1) { // TODO just for testing!
+                    setTimeout(function () {
+                        console.log('x', teamId, idx);
+
+                        fetchGames(teamId, function(games) {
+                            console.log('size', teamId, games.length);
+
+                            games.forEach(function (game) {
+                                console.log('game', game);
+                                gamesDb.insert(game, game.event_id, function(err, body) {
+                                    if (err) {
+                                        console.error(err);
+                                    }
+                                    else {
+                                        console.log(body);
+                                    }
+                                });
+                            });
+                        });
+                    }, idx * 500);
+                }
+            });
+        }
+    });
+}
+
+function isNull(results) {
+    return results == null ? 0 : (results[1] || 0);
+}
+
+function fetchResultsForGames() {
+    gamesDb.list(function(err, body) {
+        if (!err) {
+            body.rows.forEach(function(doc, idx) {
+                var gameId = doc.id;
+                if (idx < 1) { // TODO just for testing!
+                    setTimeout(function () {
+                        console.log('x', gameId, idx);
+                        fetchResults(gameId, function(result) {
+                            console.log('result', gameId, result.length);
+
+                            resultsDb.get(gameId, { revs_info: true }, function(err, existingResult) {
+                                if (err) {
+                                    console.error(err);
+                                }
+                                else {
+                                    console.log('existingResult', !isNull(existingResult));
+                                    if (existingResult) {
+                                        result._id = existingResult._id;
+                                        result._rev = existingResult._rev;
+                                    }
+                                    existingResult = result;
+                                    resultsDb.insert(existingResult, gameId, function(err, body) {
+                                        if (err) {
+                                            console.error(err);
+                                        }
+                                        else {
+                                            //console.log(body);
+                                        }
+                                    });
+                                }
+                            });
+
+
+                        });
+                    }, idx * 500);
+                }
+            });
+        }
+    });
+}
 
 // For development/testing purposes
 exports.handler = function(event, context, callback) {
@@ -169,81 +287,11 @@ exports.handler = function(event, context, callback) {
   // console.log('==================================');
   // console.log('Stopping index.handler');
 
-    // createDb(teamDbName);
-    // createDb(gamesDbName);
-    // createDb(resultsDbName);
-    // createDb(playersDbName);
+    fetchResultsForGames();
 
-  //  fetchTeams(function(teams) {
-  //    console.log('teams', teams);
-  //
-  //      teams.forEach(function (team) {
-  //          console.log('team', team);
-  //          teamDb.insert(team, team.team_id, function(err, body) {
-  //              if (err) {
-  //                  console.error(err);
-  //              }
-  //              else {
-  //                  console.log(body);
-  //              }
-  //          });
-  //      });
-  //
-  // });
-
-
-    // teamDb.list(function(err, body) {
-    //     if (!err) {
-    //         body.rows.forEach(function(doc, idx) {
-    //             var teamId = doc.id;
-    //             if (idx < 1) {
-    //                 setTimeout(function () {
-    //                     console.log('x', teamId, idx);
-    //
-    //                     fetchGames(teamId, function(games) {
-    //                         console.log('size', teamId, games.length);
-    //
-    //                         games.forEach(function (game) {
-    //                              console.log('game', game);
-    //                              gamesDb.insert(game, game.event_id, function(err, body) {
-    //                                  if (err) {
-    //                                      console.error(err);
-    //                                  }
-    //                                  else {
-    //                                      console.log(body);
-    //                                  }
-    //                              });
-    //                          });
-    //                     });
-    //                 }, idx * 500);
-    //             }
-    //         });
-    //     }
+    // fetchPlayers('atlanta-hawks', function(result) {
+    //     console.log('result', result);
     // });
-
-    gamesDb.list(function(err, body) {
-        if (!err) {
-            body.rows.forEach(function(doc, idx) {
-                var gameId = doc.id;
-                if (idx < 1) {
-                    setTimeout(function () {
-                        console.log('x', gameId, idx);
-                        fetchResults(gameId, function(result) {
-                            console.log('result', gameId, result);
-                            // gamesDb.insert(game, game.event_id, function(err, body) {
-                            //     if (err) {
-                            //         console.error(err);
-                            //     }
-                            //     else {
-                            //         console.log(body);
-                            //     }
-                            // });
-                        });
-                    }, idx * 500);
-                }
-            });
-        }
-    });
 
      // teams.forEach(function (team) {
      //     console.log('team', team);
