@@ -3,7 +3,7 @@ var https = require('https');
 var moment = require('moment-timezone');
 var util = require('util');
 var zlib = require('zlib');
-
+var FunctionQueue = require('functionqueue');
 var Cloudant = require('cloudant');
 
 var config = require('./config.json');
@@ -28,6 +28,8 @@ var teamDb = cloudant.db.use(teamDbName);
 var gamesDb = cloudant.db.use(gamesDbName);
 var resultsDb = cloudant.db.use(resultsDbName);
 var playersDb = cloudant.db.use(playersDbName);
+
+var nbaQ = new FunctionQueue(5, 60, 5, "NBA-API"); // limit is 6 per minute.  5 gives a small buffer
 
 function createDb(dbname) {
     cloudant.db.create(dbname).then(function (data) {
@@ -202,32 +204,33 @@ function setupTeams() {
     });
 }
 
+var fetchGamesFn = function (teamId) {
+    console.log('fetchGamesFn', teamId);
+    fetchGames(teamId, function(games) {
+        console.log('size', teamId, games.length);
+        games.forEach(function (game) {
+            gamesDb.get(game.event_id).then(function(existingResult) {
+                console.log('game already there', game.event_id);
+            }).catch(function(err2) {
+                gamesDb.insert(game, game.event_id, function(err, body) {
+                    if (err) {
+                        console.error(err);
+                    }
+                    else {
+                        console.log('game added', game.event_id);
+                    }
+                });
+            });
+        });
+    });
+}
+
 function setupGames() {
     teamDb.list(function(err, body) {
         if (!err) {
-            body.rows.forEach(function(doc, idx) {
+            body.rows.forEach(function(doc) {
                 var teamId = doc.id;
-                if (idx < 1) { // TODO just for testing!
-                    setTimeout(function () {
-                        console.log('x', teamId, idx);
-
-                        fetchGames(teamId, function(games) {
-                            console.log('size', teamId, games.length);
-
-                            games.forEach(function (game) {
-                                console.log('game', game);
-                                gamesDb.insert(game, game.event_id, function(err, body) {
-                                    if (err) {
-                                        console.error(err);
-                                    }
-                                    else {
-                                        console.log(body);
-                                    }
-                                });
-                            });
-                        });
-                    }, idx * 500);
-                }
+                nbaQ.scheduleFn(fetchGamesFn, [teamId])
             });
         }
     });
@@ -237,42 +240,70 @@ function isNull(results) {
     return results == null ? 0 : (results[1] || 0);
 }
 
-function fetchResultsForGames() {
-    gamesDb.list(function(err, body) {
-        if (!err) {
-            body.rows.forEach(function(doc, idx) {
-                var gameId = doc.id;
-                setTimeout(function () {
-                    console.log('x', gameId, idx);
-                    fetchResults(gameId, function(result) {
-                        console.log('result', gameId, result.length);
-                        resultsDb.get(gameId, { revs_info: true }, function(err, existingResult) {
-                            if (err) {
-                                console.error(err);
-                            }
-                            else {
-                                console.log('existingResult', !isNull(existingResult));
-                                if (existingResult) {
-                                    result._id = existingResult._id;
-                                    result._rev = existingResult._rev;
-                                }
-                                existingResult = result;
-                                resultsDb.insert(existingResult, gameId, function(err, body) {
-                                    if (err) {
-                                        console.error(err);
-                                    }
-                                    else {
-                                        //console.log(body);
-                                    }
-                                });
-                            }
-                        });
+var fetchResultsFn = function (gameId) {
+    console.log('fetchResultsFn', gameId);
 
+    resultsDb.get(gameId).then(function(existingResult) {
+        console.log('existingResult', !isNull(existingResult));
+    }).catch(function(err2) {
 
-                    });
-                }, idx * 500);
+        fetchResults(gameId, function(result) {
+            console.log('result', gameId, result.length);
+
+            resultsDb.insert(result, gameId).then(function(data) {
+                console.log('created new result', data);
+            }).catch(function(err2) {
+                console.log('something went wrong new', err2);
             });
-        }
+        });
+
+    });
+}
+
+function fetchResultsForGames() {
+    var gameFinishCutoff = moment().subtract(10, 'hours');
+    gamesDb.list({include_docs:true}).then(function(body) {
+        //console.log(body);
+        body.rows.forEach(function(doc, idx) {
+            var gameId = doc.id;
+            var gameStart = moment(doc.doc.event_start_date_time);
+            //console.log('game start ', gameStart.format());
+            if (gameStart.isBefore(gameFinishCutoff)) {
+                console.log('game data available ', gameStart.format());
+                nbaQ.scheduleFn(fetchResultsFn, [gameId])
+            }
+        });
+    }).catch(function(err) {
+        console.log('something went wrong', err);
+    });
+}
+
+var fetchPlayersFn = function (teamId) {
+    console.log('fetchPlayersFn', teamId);
+    fetchPlayers(teamId, function(playerResult) {
+        var players = playerResult.players;
+        console.log('size', teamId, players.length);
+        players.forEach(function (player) {
+            player.teamId = teamId;
+            playersDb.get(player.display_name, { revs_info: true }).then(function(existingResult) {
+                console.log('existingResult', !isNull(existingResult));
+                if (existingResult) {
+                    player._id = existingResult._id;
+                    player._rev = existingResult._rev;
+                    playersDb.insert(player, player.display_name).then(function(data) {
+                        console.log('updated existing player', data);
+                    }).catch(function(err) {
+                        console.log('something went wrong updated', err);
+                    });
+                }
+            }).catch(function(err) {
+                playersDb.insert(player, player.display_name).then(function(data) {
+                    console.log('created new player', data);
+                }).catch(function(err2) {
+                    console.log('something went wrong new', err2);
+                });
+            });
+        });
     });
 }
 
@@ -282,36 +313,7 @@ function setupPlayers() {
             console.log('body', body);
             body.rows.forEach(function(doc, idx) {
                 var teamId = doc.id;
-                setTimeout(function () {
-                    console.log('x', teamId, idx);
-
-                    fetchPlayers(teamId, function(playerResult) {
-                        var players = playerResult.players;
-                        console.log('size', teamId, players.length);
-
-                        players.forEach(function (player) {
-                            player.teamId = teamId;
-                            playersDb.get(player.display_name, { revs_info: true }).then(function(existingResult) {
-                                console.log('existingResult', !isNull(existingResult));
-                                if (existingResult) {
-                                    player._id = existingResult._id;
-                                    player._rev = existingResult._rev;
-                                    playersDb.insert(player, player.display_name).then(function(data) {
-                                        console.log('updated existing player', data);
-                                    }).catch(function(err) {
-                                        console.log('something went wrong updated', err);
-                                    });
-                                }
-                            }).catch(function(err) {
-                                playersDb.insert(player, player.display_name).then(function(data) {
-                                    console.log('created new player', data);
-                                }).catch(function(err2) {
-                                    console.log('something went wrong new', err2);
-                                });
-                            });
-                        });
-                    });
-                }, idx * 10000);
+                nbaQ.scheduleFn(fetchPlayersFn, [teamId])
             });
         }
     });
@@ -325,8 +327,9 @@ exports.handler = function(event, context, callback) {
   // console.log('==================================');
   // console.log('Stopping index.handler');
 
-    //fetchResultsForGames();
-    setupPlayers();
+    //setupGames();
+    fetchResultsForGames();
+    //setupPlayers();
 
     // fetchPlayers('atlanta-hawks', function(result) {
     //     console.log('result', result);
