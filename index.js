@@ -3,6 +3,7 @@ var https = require('https');
 var moment = require('moment-timezone');
 var util = require('util');
 var zlib = require('zlib');
+var _ = require("underscore");
 var FunctionQueue = require('functionqueue');
 var Cloudant = require('cloudant');
 
@@ -23,11 +24,13 @@ var teamDbName =    'b_teams';
 var gamesDbName =   'b_games';
 var resultsDbName = 'b_results';
 var playersDbName = 'b_players';
+var processedDbName = 'b_processed';
 
 var teamDb = cloudant.db.use(teamDbName);
 var gamesDb = cloudant.db.use(gamesDbName);
 var resultsDb = cloudant.db.use(resultsDbName);
 var playersDb = cloudant.db.use(playersDbName);
+var processedDb = cloudant.db.use(processedDbName);
 
 var nbaQ = new FunctionQueue(5, 60, 5, "NBA-API"); // limit is 6 per minute.  5 gives a small buffer
 
@@ -171,8 +174,8 @@ function createDbs() {
     createDb(gamesDbName);
     createDb(resultsDbName);
     createDb(playersDbName);
+    createDb(processedDbName);
 }
-
 
 function removeDbs() {
     cloudant.db.list(function(err, body) {
@@ -191,13 +194,10 @@ function setupTeams() {
     fetchTeams(function(teams) {
         teams.forEach(function (team) {
             console.log('team', team);
-            teamDb.insert(team, team.team_id, function(err, body) {
-                if (err) {
-                    console.error(err);
-                }
-                else {
-                    console.log(body);
-                }
+            teamDb.insert(team, team.team_id).then(function(data) {
+                console.log('created new teamDb', data);
+            }).catch(function(err2) {
+                console.log('teamDb something went wrong new', err2);
             });
         });
 
@@ -212,13 +212,10 @@ var fetchGamesFn = function (teamId) {
             gamesDb.get(game.event_id).then(function(existingResult) {
                 console.log('game already there', game.event_id);
             }).catch(function(err2) {
-                gamesDb.insert(game, game.event_id, function(err, body) {
-                    if (err) {
-                        console.error(err);
-                    }
-                    else {
-                        console.log('game added', game.event_id);
-                    }
+                gamesDb.insert(game, game.event_id).then(function(data) {
+                    console.log('created new gamesDb', data);
+                }).catch(function(err2) {
+                    console.log('gamesDb something went wrong new', err2);
                 });
             });
         });
@@ -242,21 +239,18 @@ function isNull(results) {
 
 var fetchResultsFn = function (gameId) {
     console.log('fetchResultsFn', gameId);
-
     resultsDb.get(gameId).then(function(existingResult) {
         console.log('existingResult', !isNull(existingResult));
     }).catch(function(err2) {
-
         fetchResults(gameId, function(result) {
             console.log('result', gameId, result.length);
-
             resultsDb.insert(result, gameId).then(function(data) {
                 console.log('created new result', data);
+                calcScores(gameId);
             }).catch(function(err2) {
                 console.log('something went wrong new', err2);
             });
         });
-
     });
 }
 
@@ -319,6 +313,156 @@ function setupPlayers() {
     });
 }
 
+function calcScores(gameId) {
+    console.log('calcScores', gameId);
+    var aussiePlayers = [];
+    playersDb.list({include_docs:true}).then(function(body) {
+        body.rows.forEach(function(doc, idx) {
+            var birthplace = doc.doc.birthplace;
+            if (birthplace && birthplace.toLowerCase().indexOf('australia') > -1) {
+                console.log(doc.doc.display_name);
+                aussiePlayers.push(doc.doc.display_name);
+            }
+        });
+
+        resultsDb.get(gameId).then(function(gameResult) {
+            processedDb.get(gameId).then(function(gameProcessed) {
+                console.log('gameProcessed existing', gameProcessed);
+            }).catch(function(err) {
+                var gameProcessed = {};
+                gameProcessed.id = gameId;
+                if (gameResult && gameResult.home_period_scores && gameResult.away_period_scores) {
+
+                    console.log("calcScores fullModel present ", gameId);
+
+                    var hps = gameResult.home_period_scores;
+                    var aps = gameResult.away_period_scores;
+
+                    console.log("hps",hps);
+                    console.log("aps",aps);
+
+                    var homeWonQ1 = hps[0] > aps[0];
+                    var homeWonQ2 = hps[1] > aps[1];
+                    var homeWonQ3 = hps[2] > aps[2];
+                    var homeWonQ4 = hps[3] > aps[3];
+
+                    var leadChanges = 0;
+                    if (homeWonQ1 != homeWonQ2) leadChanges++;
+                    if (homeWonQ2 != homeWonQ3) leadChanges++;
+                    if (homeWonQ3 != homeWonQ4) leadChanges++;
+
+                    var q1Dif = Math.abs(hps[0]-aps[0]);
+                    var q2Dif = Math.abs(hps[1]-aps[1]);
+                    var q3Dif = Math.abs(hps[2]-aps[2]);
+                    var q4Dif = Math.abs(hps[3]-aps[3]);
+
+                    var score1Dif = Math.max((2-q1Dif),0);
+                    var score2Dif = Math.max((4-q2Dif),0);
+                    var score3Dif = Math.max((6-q3Dif),0);
+                    var score4Dif = Math.max((8-q4Dif),0);  // less difference = greater score (with weighting towards final quarter)
+                    var scoreDif = score1Dif + score2Dif + score3Dif + score4Dif;
+
+                    if (hps.length > 4) { // overtime
+                        var otDif = Math.abs(hps[4]-aps[4]);
+                        var scoreOtDif = Math.max((5-otDif),3);
+                        scoreDif += scoreOtDif;
+
+                        var homeWonOt1 = hps[4] > aps[4];
+                        if (homeWonOt1 != homeWonQ4) leadChanges++;
+
+                        if (hps.length > 5) { // OT2
+                            otDif = Math.abs(hps[5]-aps[5]);
+                            scoreOtDif = Math.max((5-otDif),3);
+                            scoreDif += scoreOtDif;
+
+                            var homeWonOt2 = hps[4] > aps[4];
+                            if (homeWonOt2 != homeWonOt1) leadChanges++;
+                        }
+                    }
+
+                    scoreDif = scoreDif + (leadChanges*3);
+                    console.log("leadChanges " + leadChanges + " adding " + (leadChanges*3) + " scoreDif now: " + scoreDif);
+
+                    //        console.log("hps",homeWonQ1,homeWonQ2,homeWonQ3,homeWonQ4);
+                    //        console.log("scoreDif",scoreDif);
+                    //        console.log("diffs",q1Dif,q2Dif,q3Dif,q4Dif);
+
+                    var totalDifference = (q1Dif+q2Dif+q3Dif+q4Dif);
+                    var finalDifference = q4Dif;
+
+                    console.log("leadChanges",leadChanges);
+                    console.log("totalDifference",totalDifference);
+                    console.log("finalDifference",finalDifference);
+
+                    gameProcessed.pointsTotalDiff = totalDifference;
+                    gameProcessed.pointsFinalDiff = finalDifference;
+                    gameProcessed.leadChanges = leadChanges;
+                    gameProcessed.pointsBasedScore = scoreDif;
+
+                    if (scoreDif > 15)
+                        gameProcessed.pointsBasedRating = 'A';
+                    else if (scoreDif > 10)
+                        gameProcessed.pointsBasedRating = 'B';
+                    else
+                        gameProcessed.pointsBasedRating = 'C';
+                }
+
+                if (gameResult && gameResult.away_stats && gameResult.home_stats) {
+                    gameProcessed.aussies = [];
+                    //var ausPlayers = ['EXUM','BAIRSTOW','BOGUT','PATTY','MILLS','INGLES','DELLAVEDOVA','MOTUM','BAYNES','MAKER'];
+                    _.each(gameResult.away_stats.concat(gameResult.home_stats),function(stat){
+                        //console.log("checking player: ", stat.display_name, aussiePlayers);
+                        if (_.contains(aussiePlayers, stat.display_name)) {
+                            console.log("--found aussie: ", stat.display_name);
+                            gameProcessed.aussies.push(
+                                {
+                                    'name':stat.display_name,
+                                    'minutes':stat.minutes,
+                                    'points':stat.points,
+                                    'assists':stat.assists,
+                                    'turnovers':stat.turnovers,
+                                    'steals':stat.steals,
+                                    'blocks':stat.blocks,
+                                    'field_goal_percentage':stat.field_goal_percentage,
+                                    'three_point_percentage':stat.three_point_percentage,
+                                    'free_throw_percentage':stat.free_throw_percentage
+                                }
+                            );
+                        }
+                    });
+                }
+
+                if (gameResult && gameResult.home_totals && gameResult.home_totals.points) {
+                    if (Math.random() * 10 > 5) { // randomise order of score display
+                        console.log("a) setting finalScore for ", gameId, gameProcessed.finalScore);
+                        gameProcessed.finalScore = gameResult.away_totals.points + '/' + gameResult.home_totals.points;
+                    }
+                    else {
+                        console.log("b) setting finalScore for ", gameId, gameProcessed.finalScore);
+                        gameProcessed.finalScore = gameResult.home_totals.points + '/' + gameResult.away_totals.points;
+                    }
+                }
+
+                console.log("gameProcessed",gameProcessed);
+
+                processedDb.insert(gameProcessed, gameId).then(function(data) {
+                    console.log('created new gameProcessed', data);
+                }).catch(function(err2) {
+                    console.log('gameProcessed something went wrong new', err2);
+                });
+            });
+        }).catch(function(err) {
+            console.error('result', err);
+        });
+
+
+    }).catch(function(err) {
+        console.log('something went wrong', err);
+    });
+
+
+}
+
 // For development/testing purposes
 exports.handler = function(event, context, callback) {
   // console.log('Running index.handler');
@@ -327,30 +471,12 @@ exports.handler = function(event, context, callback) {
   // console.log('==================================');
   // console.log('Stopping index.handler');
 
+    // createDbs()
     //setupGames();
     fetchResultsForGames();
     //setupPlayers();
 
-    // fetchPlayers('atlanta-hawks', function(result) {
-    //     console.log('result', result);
-    // });
-
-     // teams.forEach(function (team) {
-     //     console.log('team', team);
-     //     teamDb.insert(team, team.team_id, function(err, body) {
-     //         if (err) {
-     //             console.error(err);
-     //         }
-     //         else {
-     //             console.log(body);
-     //         }
-     //     });
-     // });
-
-    // fetchResults('20171020-boston-celtics-at-philadelphia-76ers', function(result) {
-    //    // console.log('result', result);
-    //     console.log('size', result.length);
-    // });
+    calcScores('20171018-philadelphia-76ers-at-washington-wizards');
 
   if (callback) {
     callback(null, event);
