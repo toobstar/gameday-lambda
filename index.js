@@ -280,7 +280,7 @@ function recalcScoresForFinished() {
             var gameStart = moment(doc.doc.event_information.start_date_time);
             // console.log(gameId, ' doc ', );
             console.log(gameId, ' game start ', gameStart.format());
-            if (gameStart.isBefore(gameFinishCutoff)) {
+            if (gameStart.isBefore(gameFinishCutoff) && idx < 3) {  // TODO just for testing
                 processedDb.get(gameId).then(function(gameProcessed) {
                     console.log('gameProcessed existing', gameProcessed);
                 }).catch(function(err) {
@@ -349,18 +349,19 @@ function calcScores(gameId) {
 
         resultsDb.get(gameId).then(function(gameResult) {
             processedDb.get(gameId).then(function(gameProcessed) {
-                console.log('gameProcessed existing', gameProcessed);
+
             }).catch(function(err) {
+                //console.log('calcScores-gameResult', gameResult);
                 var gameProcessed = {};
                 gameProcessed.id = gameId;
                 gameProcessed.home_team = {};
-                gameProcessed.home_team.id = gameResult.home.team_id;
-                gameProcessed.home_team.abbreviation = gameResult.home.abbreviation;
-                gameProcessed.home_team.full_name = gameResult.home.full_name;
+                gameProcessed.home_team.id = gameResult.home_team.team_id;
+                gameProcessed.home_team.abbreviation = gameResult.home_team.abbreviation;
+                gameProcessed.home_team.full_name = gameResult.home_team.full_name;
                 gameProcessed.away_team = {};
-                gameProcessed.away_team.id = gameResult.opponent.team_id;
-                gameProcessed.away_team.abbreviation = gameResult.opponent.abbreviation;
-                gameProcessed.away_team.full_name = gameResult.opponent.full_name;
+                gameProcessed.away_team.id = gameResult.away_team.team_id;
+                gameProcessed.away_team.abbreviation = gameResult.away_team.abbreviation;
+                gameProcessed.away_team.full_name = gameResult.away_team.full_name;
                 if (gameResult && gameResult.home_period_scores && gameResult.away_period_scores) {
 
                     console.log("calcScores fullModel present ", gameId);
