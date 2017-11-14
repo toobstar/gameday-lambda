@@ -354,6 +354,7 @@ function calcScores(gameId) {
                 //console.log('calcScores-gameResult', gameResult);
                 var gameProcessed = {};
                 gameProcessed.id = gameId;
+                gameProcessed.event_start_date_time = gameResult.event_information.start_date_time;
                 gameProcessed.home_team = {};
                 gameProcessed.home_team.id = gameResult.home_team.team_id;
                 gameProcessed.home_team.abbreviation = gameResult.home_team.abbreviation;
