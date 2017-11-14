@@ -272,6 +272,28 @@ function fetchResultsForGames() {
     });
 }
 
+function recalcScoresForFinished() {
+    var gameFinishCutoff = moment().subtract(10, 'hours');
+    resultsDb.list({include_docs:true}).then(function(body) {
+        body.rows.forEach(function(doc, idx) {
+            var gameId = doc.id;
+            var gameStart = moment(doc.doc.event_information.start_date_time);
+            // console.log(gameId, ' doc ', );
+            console.log(gameId, ' game start ', gameStart.format());
+            if (gameStart.isBefore(gameFinishCutoff)) {
+                processedDb.get(gameId).then(function(gameProcessed) {
+                    console.log('gameProcessed existing', gameProcessed);
+                }).catch(function(err) {
+                    console.log('no gameProcessed', gameId);
+                    calcScores(gameId);
+                });
+            }
+        });
+    }).catch(function(err) {
+        console.log('something went wrong', err);
+    });
+}
+
 var fetchPlayersFn = function (teamId) {
     console.log('fetchPlayersFn', teamId);
     fetchPlayers(teamId, function(playerResult) {
@@ -331,6 +353,14 @@ function calcScores(gameId) {
             }).catch(function(err) {
                 var gameProcessed = {};
                 gameProcessed.id = gameId;
+                gameProcessed.home_team = {};
+                gameProcessed.home_team.id = gameResult.home.team_id;
+                gameProcessed.home_team.abbreviation = gameResult.home.abbreviation;
+                gameProcessed.home_team.full_name = gameResult.home.full_name;
+                gameProcessed.away_team = {};
+                gameProcessed.away_team.id = gameResult.opponent.team_id;
+                gameProcessed.away_team.abbreviation = gameResult.opponent.abbreviation;
+                gameProcessed.away_team.full_name = gameResult.opponent.full_name;
                 if (gameResult && gameResult.home_period_scores && gameResult.away_period_scores) {
 
                     console.log("calcScores fullModel present ", gameId);
@@ -473,10 +503,9 @@ exports.handler = function(event, context, callback) {
 
     // createDbs()
     //setupGames();
-    fetchResultsForGames();
+    // fetchResultsForGames();
     //setupPlayers();
-
-    calcScores('20171018-philadelphia-76ers-at-washington-wizards');
+    recalcScoresForFinished();
 
   if (callback) {
     callback(null, event);
