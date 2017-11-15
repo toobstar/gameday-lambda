@@ -280,7 +280,7 @@ function recalcScoresForFinished() {
             var gameStart = moment(doc.doc.event_information.start_date_time);
             // console.log(gameId, ' doc ', );
             console.log(gameId, ' game start ', gameStart.format());
-            if (gameStart.isBefore(gameFinishCutoff) && idx < 3) {  // TODO just for testing
+            if (gameStart.isBefore(gameFinishCutoff)) {
                 processedDb.get(gameId).then(function(gameProcessed) {
                     console.log('gameProcessed existing', gameProcessed);
                 }).catch(function(err) {
