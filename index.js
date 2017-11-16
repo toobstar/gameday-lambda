@@ -505,13 +505,13 @@ exports.handler = function(event, context, callback) {
 
     // createDbs()
     //setupGames();
-    // fetchResultsForGames();
+    fetchResultsForGames();
     //setupPlayers();
-    recalcScoresForFinished();
+    // recalcScoresForFinished();
 
   if (callback) {
     callback(null, event);
   }
 };
 
-exports.handler(); // just for local testing
+// exports.handler(); // just for local testing
