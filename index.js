@@ -257,14 +257,18 @@ var fetchResultsFn = function (gameId) {
 function fetchResultsForGames() {
     var gameFinishCutoff = moment().subtract(10, 'hours');
     gamesDb.list({include_docs:true}).then(function(body) {
-        //console.log(body);
         body.rows.forEach(function(doc, idx) {
             var gameId = doc.id;
             var gameStart = moment(doc.doc.event_start_date_time);
             //console.log('game start ', gameStart.format());
             if (gameStart.isBefore(gameFinishCutoff)) {
-                console.log('game data available ', gameStart.format());
-                nbaQ.scheduleFn(fetchResultsFn, [gameId])
+                //console.log('game data available ', gameStart.format());
+                resultsDb.get(gameId).then(function(existingResult) {
+                    //console.log('existingResult', !isNull(existingResult));
+                }).catch(function(err2) {
+                    console.log('scheduling fetch results ', gameStart.format());
+                    nbaQ.scheduleFn(fetchResultsFn, [gameId])
+                });
             }
         });
     }).catch(function(err) {
